@@ -9,20 +9,33 @@ dev_list = "/mnt/data1/waris/datasets/data/arctic_dataset/all_data_for_ac_vc_tra
 with open(train_list, encoding="utf-8") as f:
     train_metadata = [line.strip().split("|") for line in f]
 
+train_list=[]
+spk_dict={}
+
+for idx in range(len(train_metadata)):
+    _, spkr, fid = train_metadata[idx][0].split("-")
+    fid = fid.split(".")[0]
+
+    train_list.append(f'{spkr}/{fid}')
+    if spkr not in spk_dict:
+        spk_dict[spkr] = []
+    spk_dict[spkr].append(f'{fid}')
+
 with open('train.txt', mode='wt', encoding='utf-8') as myfile:
-    for idx in range(len(train_metadata)):
-        _, spkr, fid = train_metadata[idx][0].split("-")
-        fid = fid.split(".")[0]
-        myfile.write(f'{spkr}/{fid}')
+    for entry in train_list:
+        spkr, fid = entry.split('/')
+        rnd_spk_uttr = random.choice(spk_dict[spkr])
+        myfile.write(f'{entry}/{rnd_spk_uttr}')
         myfile.write('\n')
 
 with open(dev_list, encoding="utf-8") as f:
     dev_metadata = [line.strip().split("|") for line in f]
+
 with open('dev.txt', mode='wt', encoding='utf-8') as myfile:
     for idx in range(len(dev_metadata)):
         _, spkr, fid = dev_metadata[idx][0].split("-")
         fid = fid.split(".")[0]
-        myfile.write(f'{spkr}/{fid}')
+        myfile.write(f'{spkr}/{fid}/{fid}')
         myfile.write('\n')
 
 

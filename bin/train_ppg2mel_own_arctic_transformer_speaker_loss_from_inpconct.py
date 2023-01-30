@@ -245,13 +245,13 @@ class Solver(BaseSolver):
                 ppgs, mels, in_lengths, \
                     out_lengths, spk_ids, prosody_vec, _, lwav = self.fetch_data(data)
                 self.timer.cnt("rd")
-                loss, after_outs, before_outs, ys, olens = self.model(
+                loss, commit_loss, after_outs, before_outs, ys, olens = self.model(
                     xs=ppgs,
                     ilens= in_lengths,
                     ys=mels,
                     olens=out_lengths,
                     spembs=spk_ids,
-                    prosody_vec=prosody_vec,
+                    prosody_vec=mels,
                 )
                 # loss = self.loss_criterion(mel_pred, mels, out_lengths)
                 # loss, after_outs, before_outs, logits, ys, labels, olens
@@ -274,8 +274,8 @@ class Solver(BaseSolver):
                 if (self.step == 1) or (self.step % self.PROGRESS_STEP == 0):
                     # self.progress("Tr stat | Loss - {:.4f} | Mel - {:.4f} | Spk-loss - {:.4f} | Grad. Norm - {:.2f} | {}"
                     #               .format(loss.cpu().item(),mel_loss,spk_loss, grad_norm, self.timer.show()))
-                    self.progress("Tr stat | Loss - {:.4f} | Grad. Norm - {:.2f} | {}"
-                                  .format(loss.cpu().item(), grad_norm, self.timer.show()))
+                    self.progress("Tr stat | T Loss - {:.4f} | C Loss - {:.4f} | Grad. Norm - {:.2f} | {}"
+                                  .format(loss.cpu().item(), self.config.model.commitment_cost*commit_loss.cpu().item(), grad_norm, self.timer.show()))
                     self.write_log('loss', {'tr': loss})
 
                 # Validation
@@ -307,13 +307,13 @@ class Solver(BaseSolver):
                 out_lengths, spk_ids, prosody_vec, _, _ = self.fetch_data(data)
 
             with torch.no_grad():
-                loss, after_outs, before_outs, ys, olens = self.model(
+                loss, commit_loss, after_outs, before_outs, ys, olens = self.model(
                     xs=ppgs,
                     ilens= in_lengths,
                     ys=mels,
                     olens=out_lengths,
                     spembs=spk_ids,
-                    prosody_vec=prosody_vec,
+                    prosody_vec=mels,
                 )
                 # spkdvs = self.compute_secondary_models(before_outs)
                 # spkd_loss = mseloss(spkdvs,spk_ids)

@@ -445,16 +445,17 @@ class OneshotArciticVcDataset(torch.utils.data.Dataset):
         return len(self.fid_list)
     
     def get_spk_dvec(self, fid):
-        spk_dvec_path = f"{self.arctic_spk_dvec_dir}/{fid}.npy"
+        sprf , wfle, skemb = fid.split('/')
+        spk_dvec_path = f"{self.arctic_spk_dvec_dir}/{sprf}/{skemb}.npy"
         return torch.from_numpy(np.load(spk_dvec_path))
     
     def get_prosody_input(self, fid): #ppg-ERMS-arctic_a0343.npy
-        sprf , wfle = fid.split('/')
+        sprf , wfle, skemb = fid.split('/')
         prosody_vec = np.load(f"{self.prosody_vec_dir}/ppg-{sprf}-{wfle}.{self.prosody_ext}")
         return prosody_vec
 
     def get_ppg_input(self, fid): #ppg-ERMS-arctic_a0343.npy
-        sprf , wfle = fid.split('/')
+        sprf , wfle, skemb = fid.split('/')
         ppg = np.load(f"{self.arctic_ppg_dir}/ppg-{sprf}-{wfle}.{self.ppg_file_ext}")
         return ppg
     
@@ -487,7 +488,7 @@ class OneshotArciticVcDataset(torch.utils.data.Dataset):
         fid = self.fid_list[index]
         
         # 1. Load features
-        sprf , wfle = fid.split('/')
+        sprf , wfle, skemb = fid.split('/')
         ppg = self.get_ppg_input(fid)
         # f0 = np.load(f"{self.arctic_f0_dir}/{fid}.{self.f0_file_ext}")
         mel, lwav = self.compute_mel(f"{self.arctic_wav_dir}/{sprf}/wav/{wfle}.{self.wav_file_ext}")

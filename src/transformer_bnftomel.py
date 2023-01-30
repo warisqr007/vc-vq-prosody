@@ -32,8 +32,8 @@ from espnet.nets.pytorch_backend.e2e_tts_transformer import (
     GuidedMultiHeadAttentionLoss,  # noqa: H301
     TTSPlot,  # noqa: H301
 )
-from src.prosody_modules import ProsodyEncoder
-from src.rr_module import InterpLnr
+from vector_quantize_pytorch import VectorQuantize
+from src.prosody_modules import ECAPA_TDNN
 
 class Transformer(TTSInterface, torch.nn.Module):
     """VC Transformer module.
@@ -71,6 +71,7 @@ class Transformer(TTSInterface, torch.nn.Module):
         self.odim = args.odim
         self.whereusespkd = args.whereusespkd
         self.spk_embed_dim = args.spk_embed_dim
+        self.prosody_emb_dim = args.prosody_emb_dim
         if self.spk_embed_dim is not None:
             self.spk_embed_integration_type = args.spk_embed_integration_type
         self.use_scaled_pos_enc = args.use_scaled_pos_enc
@@ -91,31 +92,26 @@ class Transformer(TTSInterface, torch.nn.Module):
             else:
                 self.num_heads_applied_guided_attn = args.num_heads_applied_guided_attn
             self.modules_applied_guided_attn = args.modules_applied_guided_attn
-        #self.use_f0 = args.use_f0
-        # self.use_rr = args.use_rr
-
-        # if self.use_rr:
-        #     self.interp = InterpLnr()
 
         # use idx 0 as padding idx
         padding_idx = 0
 
         # define projection layer
-        if self.spk_embed_dim is not None:
-            if self.whereusespkd == 'atinput':
-                if self.spk_embed_integration_type == "add":
-                    self.projection = torch.nn.Linear(self.spk_embed_dim, args.idim)
-                else:
-                    self.projection = torch.nn.Linear(
-                        args.idim + self.spk_embed_dim, args.idim
-                    )
-            else:
-                if self.spk_embed_integration_type == "add":
-                    self.projection = torch.nn.Linear(self.spk_embed_dim, args.adim)
-                else:
-                    self.projection = torch.nn.Linear(
-                        args.adim + self.spk_embed_dim, args.adim
-                    )
+        # if self.spk_embed_dim is not None:
+        #     if self.whereusespkd == 'atinput':
+        #         if self.spk_embed_integration_type == "add":
+        #             self.projection = torch.nn.Linear(self.spk_embed_dim, args.idim)
+        #         else:
+        #             self.projection = torch.nn.Linear(
+        #                 args.idim + self.spk_embed_dim, args.idim
+        #             )
+        #     else:
+        #         if self.spk_embed_integration_type == "add":
+        #             self.projection = torch.nn.Linear(self.spk_embed_dim, args.adim)
+        #         else:
+        #             self.projection = torch.nn.Linear(
+        #                 args.adim + self.spk_embed_dim, args.adim
+        #             )
         # get positional encoding class
         pos_enc_class = (
             ScaledPositionalEncoding if self.use_scaled_pos_enc else PositionalEncoding
@@ -146,77 +142,34 @@ class Transformer(TTSInterface, torch.nn.Module):
             )
         else:
             encoder_input_layer = args.transformer_input_layer
-        self.encoder = Encoder(
-            idim=args.idim,
-            attention_dim=args.adim,
-            attention_heads=args.aheads,
-            linear_units=args.eunits,
-            num_blocks=args.elayers,
-            input_layer=encoder_input_layer,
-            dropout_rate=args.transformer_enc_dropout_rate,
-            positional_dropout_rate=args.transformer_enc_positional_dropout_rate,
-            attention_dropout_rate=args.transformer_enc_attn_dropout_rate,
-            pos_enc_class=pos_enc_class,
-            normalize_before=args.encoder_normalize_before,
-            concat_after=args.encoder_concat_after,
-            positionwise_layer_type=args.positionwise_layer_type,
-            positionwise_conv_kernel_size=args.positionwise_conv_kernel_size,
-        )
-
-        # self.pitch_convs = torch.nn.Sequential(
-        #     torch.nn.Conv1d(2, args.adim, kernel_size=1, bias=False),
-        #     torch.nn.LeakyReLU(0.1),
-
-        #     torch.nn.InstanceNorm1d(args.adim, affine=False),
-        #     torch.nn.Conv1d(
-        #         args.adim, args.adim, 
-        #         kernel_size=2*2, 
-        #         stride=2, 
-        #         padding=2//2,
-        #     ),
-        #     torch.nn.LeakyReLU(0.1),
-            
-        #     torch.nn.InstanceNorm1d(args.adim, affine=False),
-        #     torch.nn.Conv1d(
-        #         args.adim, args.adim, 
-        #         kernel_size=2*2, 
-        #         stride=2, 
-        #         padding=2//2,
-        #     ),
-        #     torch.nn.LeakyReLU(0.1),
-
-        #     torch.nn.InstanceNorm1d(args.adim, affine=False),
+        # self.encoder = Encoder(
+        #     idim=args.idim,
+        #     attention_dim=args.adim,
+        #     attention_heads=args.aheads,
+        #     linear_units=args.eunits,
+        #     num_blocks=args.elayers,
+        #     input_layer=encoder_input_layer,
+        #     dropout_rate=args.transformer_enc_dropout_rate,
+        #     positional_dropout_rate=args.transformer_enc_positional_dropout_rate,
+        #     attention_dropout_rate=args.transformer_enc_attn_dropout_rate,
+        #     pos_enc_class=pos_enc_class,
+        #     normalize_before=args.encoder_normalize_before,
+        #     concat_after=args.encoder_concat_after,
+        #     positionwise_layer_type=args.positionwise_layer_type,
+        #     positionwise_conv_kernel_size=args.positionwise_conv_kernel_size,
         # )
 
-        self.prosody_encoder = ProsodyEncoder()
-        
-        self.prosody_bottleneck = torch.nn.Sequential(
-            torch.nn.Conv1d(256, 32, kernel_size=1, bias=False),
-            torch.nn.LeakyReLU(0.1),
+        self.vq = VectorQuantize(
+                    dim = 256,
+                    codebook_size = 256,
+                    use_cosine_sim = True   # set this to True
+                )
+        self.commitment_cost = args.commitment_cost
 
-            torch.nn.InstanceNorm1d(32, affine=False),
-            torch.nn.Conv1d(
-                32, 32, 
-                kernel_size=3*3, 
-                stride=2, 
-                padding=2//2,
-            ),
-            torch.nn.LeakyReLU(0.1),
-            
-            torch.nn.InstanceNorm1d(32, affine=False),
-            torch.nn.Conv1d(
-                32, args.adim, 
-                kernel_size=1,
-                stride=2
-            ),
-            torch.nn.LeakyReLU(0.1),
-            torch.nn.InstanceNorm1d(args.adim, affine=False),
-        )
+        self.prosody_encoder = ECAPA_TDNN()
 
-        self.prosody_attention = MultiHeadedAttention(4, args.adim, 0.2)
-
-        self.prosody_projection = torch.nn.Linear(
-            args.adim*2, args.adim
+        self.prosody_spk_projection = torch.nn.Linear(
+            args.idim + self.spk_embed_dim + self.prosody_emb_dim, args.adim
         )
 
         # define transformer decoder
@@ -334,8 +287,8 @@ class Transformer(TTSInterface, torch.nn.Module):
             # labels = labels[:, :max_olen]
 
         
-        if self.whereusespkd == 'atinput':
-            xs = self._integrate_with_spk_in_embed(xs,spembs)
+        # if self.whereusespkd == 'atinput':
+        #     xs = self._integrate_with_spk_in_embed(xs,spembs)
         # thin out input frames for reduction factor
         # (B, Lmax, idim) ->  (B, Lmax // r, idim * r)
         if self.encoder_reduction_factor > 1:
@@ -358,27 +311,33 @@ class Transformer(TTSInterface, torch.nn.Module):
         # print(x_masks[0])
         # print(x_masks.shape)
         # print(f'xs_ds : {xs_ds.shape} \n ilens_ds : {ilens_ds.shape} \n x_masks : {x_masks.shape}')
-        hs, hs_masks = self.encoder(xs_ds, x_masks)
+        # hs, hs_masks = self.encoder(xs_ds, x_masks)
+
+        ##### Vector quantize BNFs ######
+        xs_quantized, indices, commit_loss = self.vq(xs_ds)
+
+        #print(f'xs : {xs_quantized.shape} \n prosody_vec : {prosody_vec.shape}')
+
+        spembs = F.normalize(spembs).unsqueeze(1).expand(-1, xs.size(1), -1)
+        prosody_emb = self.prosody_encoder(prosody_vec.transpose(1,2))
+        #print(f'prosody_emb : {prosody_emb.shape}')
+        prosody_emb = F.normalize(prosody_emb).unsqueeze(1).expand(-1, xs.size(1), -1)
+
+        hs_int = self.prosody_spk_projection(torch.cat([xs_quantized, prosody_emb, spembs], dim=-1))
 
         # print(f'hs : {hs.shape} \n hs_masks : {hs_masks.shape}')
         # print(hs_masks[0])
         # print(f'hs_mask shape: {hs_masks.shape}')
 
-        #add pitch information
-        # if self.use_f0:
-        #     logf0_uv = self.pitch_convs(logf0_uv.transpose(1, 2)).transpose(1, 2)
-        #     # print(logf0_uv.shape)
-        #     # print(hs.shape)
-        #     hs = hs + logf0_uv
 
         # integrate speaker embedding
-        if self.spk_embed_dim is not None and self.whereusespkd != 'atinput':
-            hs_int = self._integrate_with_spk_embed(hs, spembs)
-        else:
-            hs_int = hs
+        # if self.spk_embed_dim is not None and self.whereusespkd != 'atinput':
+        #     hs_int = self._integrate_with_spk_embed(hs, spembs)
+        # else:
+        #     hs_int = hs
 
-        # Add prosody information
-        hs_int = self._integrate_with_prosody_embed(hs_int, hs_masks, prosody_vec)
+        # # Add prosody information
+        # hs_int = self._integrate_with_prosody_embed(hs_int, hs_masks, prosody_vec)
 
         # thin out frames for reduction factor (B, Lmax, odim) ->  (B, Lmax//r, odim)
         if self.reduction_factor > 1:
@@ -400,7 +359,7 @@ class Transformer(TTSInterface, torch.nn.Module):
 
         # forward decoder
         y_masks = self._target_mask(olens_in)
-        zs, _ = self.decoder(ys_in, y_masks, hs_int, hs_masks)
+        zs, _ = self.decoder(ys_in, y_masks, hs_int, x_masks)
         # (B, Lmax//r, odim * r) -> (B, Lmax//r * r, odim)
         before_outs = self.feat_out(zs).view(zs.size(0), -1, self.odim)
         # (B, Lmax//r, r) -> (B, Lmax//r * r)
@@ -433,7 +392,7 @@ class Transformer(TTSInterface, torch.nn.Module):
             after_outs, before_outs, ys, olens
         )
         # loss = l1_loss + l2_loss 
-        loss = l2_loss
+        loss = self.commitment_cost*commit_loss + l2_loss
         # if self.loss_type == "L1":
         #     loss = l1_loss 
         # elif self.loss_type == "L2":
@@ -515,7 +474,7 @@ class Transformer(TTSInterface, torch.nn.Module):
             ]
         # self.reporter.report(report_keys)
 
-        return loss, after_outs, before_outs, ys, olens
+        return loss, commit_loss, after_outs, before_outs, ys, olens
 
     def inference(self, x, spemb=None, prosody_vec=None, *args, **kwargs):
         """Generate the sequence of features given the sequences of acoustic features.
@@ -773,72 +732,72 @@ class Transformer(TTSInterface, torch.nn.Module):
 
         return att_ws_dict
 
-    def _integrate_with_spk_embed(self, hs, spembs):
-        """Integrate speaker embedding with hidden states.
+    # def _integrate_with_spk_embed(self, hs, spembs):
+    #     """Integrate speaker embedding with hidden states.
 
-        Args:
-            hs (Tensor): Batch of hidden state sequences (B, Tmax, adim).
-            spembs (Tensor): Batch of speaker embeddings (B, spk_embed_dim).
+    #     Args:
+    #         hs (Tensor): Batch of hidden state sequences (B, Tmax, adim).
+    #         spembs (Tensor): Batch of speaker embeddings (B, spk_embed_dim).
 
-        Returns:
-            Tensor: Batch of integrated hidden state sequences (B, Tmax, adim)
+    #     Returns:
+    #         Tensor: Batch of integrated hidden state sequences (B, Tmax, adim)
 
-        """
-        if self.spk_embed_integration_type == "add":
-            # apply projection and then add to hidden states
-            spembs = self.projection(F.normalize(spembs))
-            hs = hs + spembs.unsqueeze(1)
-        elif self.spk_embed_integration_type == "concat":
-            # concat hidden states with spk embeds and then apply projection
-            spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hs.size(1), -1)
-            hs = self.projection(torch.cat([hs, spembs], dim=-1))
-        else:
-            raise NotImplementedError("support only add or concat.")
+    #     """
+    #     if self.spk_embed_integration_type == "add":
+    #         # apply projection and then add to hidden states
+    #         spembs = self.projection(F.normalize(spembs))
+    #         hs = hs + spembs.unsqueeze(1)
+    #     elif self.spk_embed_integration_type == "concat":
+    #         # concat hidden states with spk embeds and then apply projection
+    #         spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hs.size(1), -1)
+    #         hs = self.projection(torch.cat([hs, spembs], dim=-1))
+    #     else:
+    #         raise NotImplementedError("support only add or concat.")
 
-        return hs
+    #     return hs
 
-    def _integrate_with_spk_in_embed(self, xs, spembs):
-        """Integrate speaker embedding with hidden states.
+    # def _integrate_with_spk_in_embed(self, xs, spembs):
+    #     """Integrate speaker embedding with hidden states.
 
-        Args:
-            hs (Tensor): Batch of hidden state sequences (B, Tmax, adim).
-            spembs (Tensor): Batch of speaker embeddings (B, spk_embed_dim).
+    #     Args:
+    #         hs (Tensor): Batch of hidden state sequences (B, Tmax, adim).
+    #         spembs (Tensor): Batch of speaker embeddings (B, spk_embed_dim).
 
-        Returns:
-            Tensor: Batch of integrated hidden state sequences (B, Tmax, adim)
+    #     Returns:
+    #         Tensor: Batch of integrated hidden state sequences (B, Tmax, adim)
 
-        """
-        if self.spk_embed_integration_type == "add":
-            # apply projection and then add to hidden states
-            spembs = self.projection(F.normalize(spembs))
-            xs = xs + spembs.unsqueeze(1)
-        elif self.spk_embed_integration_type == "concat":
-            # concat hidden states with spk embeds and then apply projection
-            spembs = F.normalize(spembs).unsqueeze(1).expand(-1, xs.size(1), -1)
-            xs = self.projection(torch.cat([xs, spembs], dim=-1))
+    #     """
+    #     if self.spk_embed_integration_type == "add":
+    #         # apply projection and then add to hidden states
+    #         spembs = self.projection(F.normalize(spembs))
+    #         xs = xs + spembs.unsqueeze(1)
+    #     elif self.spk_embed_integration_type == "concat":
+    #         # concat hidden states with spk embeds and then apply projection
+    #         spembs = F.normalize(spembs).unsqueeze(1).expand(-1, xs.size(1), -1)
+    #         xs = self.projection(torch.cat([xs, spembs], dim=-1))
             
-        else:
-            raise NotImplementedError("support only add or concat.")
+    #     else:
+    #         raise NotImplementedError("support only add or concat.")
 
-        return xs
+    #     return xs
 
-    def _integrate_with_prosody_embed(self, hs, hs_masks, prosody_vec):
-        #spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hs.size(1), -1)
-        prosody_vec, _ = self.prosody_encoder(prosody_vec, None)
-        prosody_vec = self.prosody_bottleneck(prosody_vec.transpose(1, 2)).transpose(1, 2)
+    # def _integrate_with_prosody_embed(self, hs, hs_masks, prosody_vec):
+    #     #spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hs.size(1), -1)
+    #     prosody_vec, _ = self.prosody_encoder(prosody_vec, None)
+    #     prosody_vec = self.prosody_bottleneck(prosody_vec.transpose(1, 2)).transpose(1, 2)
 
-        #config III:
-        # prosody_vec_att = self.prosody_attention(prosody_vec, hs, hs, None)
-        # hs =  prosody_vec_att + prosody_vec
+    #     #config III:
+    #     # prosody_vec_att = self.prosody_attention(prosody_vec, hs, hs, None)
+    #     # hs =  prosody_vec_att + prosody_vec
 
-        #config IV:
-        prosody_vec_att = self.prosody_attention(prosody_vec, hs, hs, None)
-        #print(f'hs : {hs.shape} \n prosody_vec : {prosody_vec.shape} \n prosody att : {prosody_vec_att.shape}')
+    #     #config IV:
+    #     prosody_vec_att = self.prosody_attention(prosody_vec, hs, hs, None)
+    #     #print(f'hs : {hs.shape} \n prosody_vec : {prosody_vec.shape} \n prosody att : {prosody_vec_att.shape}')
 
-        #hs =  prosody_vec_att + hs #
-        hs = self.prosody_projection(torch.cat([prosody_vec, prosody_vec_att], dim=-1))
+    #     #hs =  prosody_vec_att + hs #
+    #     hs = self.prosody_projection(torch.cat([prosody_vec, prosody_vec_att], dim=-1))
 
-        return hs
+    #     return hs
 
     def _source_mask(self, ilens):
         """Make masks for self-attention.
