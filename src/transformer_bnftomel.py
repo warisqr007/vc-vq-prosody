@@ -161,7 +161,7 @@ class Transformer(TTSInterface, torch.nn.Module):
 
         self.vq = VectorQuantize(
                     dim = 256,
-                    codebook_size = 256,
+                    codebook_size =  50,
                     use_cosine_sim = True   # set this to True
                 )
         self.commitment_cost = args.commitment_cost
@@ -307,23 +307,62 @@ class Transformer(TTSInterface, torch.nn.Module):
             xs_ds, ilens_ds = xs, ilens
         
         # forward encoder
-        x_masks = self._source_mask(ilens_ds)
+        # x_masks = self._source_mask(ilens_ds)
         # print(x_masks[0])
         # print(x_masks.shape)
         # print(f'xs_ds : {xs_ds.shape} \n ilens_ds : {ilens_ds.shape} \n x_masks : {x_masks.shape}')
         # hs, hs_masks = self.encoder(xs_ds, x_masks)
 
         ##### Vector quantize BNFs ######
+        # TODO
+        # Remove padding from data_load
+        # Add logic for unique_consective on indices and use it to downsample vector quantized bnfs
+        # Now pad the bnf sequence batch and create length vectors
+        # Add one block of (self attention layer + conv layer)
+        ###################
+
         xs_quantized, indices, commit_loss = self.vq(xs_ds)
+        #print(f'xs : {xs_quantized.shape} \n prosody_vec : {prosody_vec.shape} \nIndices: {indices.shape}')
 
-        #print(f'xs : {xs_quantized.shape} \n prosody_vec : {prosody_vec.shape}')
+        # indices_unique = indices.data.new(*(indices.shape[0], indices.shape[1])).fill_(0)
+        ilens_new = indices.data.new(*(indices.shape[0],)).fill_(0)
+        for i, x_idx in enumerate(indices):
+            x_unique, x_counts_idx = torch.unique_consecutive(x_idx, return_counts=True)
+            # print(f'x unique : {x_unique.shape}')
+            # print(x_unique)
+            # print(f'x unique counts : {x_counts_idx.shape}')
+            # print(x_counts_idx)
+            # length = x_unique.size(0)
+            # indices_unique[i, :length] = x_unique[:length]
+            ilens_new[i] = x_unique.size(0)
 
-        spembs = F.normalize(spembs).unsqueeze(1).expand(-1, xs.size(1), -1)
+        # print(f'ilens : {ilens_new}')
+        ilen_max = max(ilens_new)
+        xs_quantized_unique = xs_quantized.data.new(*(xs_quantized.shape[0], ilen_max, xs_quantized.shape[2])).fill_(0)
+        for i, (x_quantized, x_idx) in enumerate(zip(xs_quantized, indices)):
+            x_idx_unique, x_idx_counts = torch.unique_consecutive(x_idx, return_counts=True)
+            # print(f'x idx unique : {x_idx_unique.shape}')
+            # print(x_idx_unique)
+            # print(f'x idx unique counts : {x_idx_counts.shape}')
+            # print(x_idx_counts)
+            x_idx_counts = torch.cat([torch.tensor([0]).cuda(), x_idx_counts[:-1]])
+            # print(f'x idx unique counts after : {x_idx_counts.shape}')
+            # print(x_idx_counts)
+            x_quant_idx = x_idx_counts.cumsum(dim=0)
+            # print(f'x idx unique counts cumsum : {x_quant_idx.shape}')
+            # print(x_quant_idx)
+            length = x_idx_unique.size(0)
+            xs_quantized_unique[i, :length, :] = x_quantized[x_quant_idx]
+
+
+        x_masks = self._source_mask(ilens_new)
+
+        spembs = F.normalize(spembs).unsqueeze(1).expand(-1, xs_quantized_unique.size(1), -1)
         prosody_emb = self.prosody_encoder(prosody_vec.transpose(1,2))
         #print(f'prosody_emb : {prosody_emb.shape}')
-        prosody_emb = F.normalize(prosody_emb).unsqueeze(1).expand(-1, xs.size(1), -1)
+        prosody_emb = F.normalize(prosody_emb).unsqueeze(1).expand(-1, xs_quantized_unique.size(1), -1)
 
-        hs_int = self.prosody_spk_projection(torch.cat([xs_quantized, prosody_emb, spembs], dim=-1))
+        hs_int = self.prosody_spk_projection(torch.cat([xs_quantized_unique, prosody_emb, spembs], dim=-1))
 
         # print(f'hs : {hs.shape} \n hs_masks : {hs_masks.shape}')
         # print(hs_masks[0])

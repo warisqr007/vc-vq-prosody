@@ -247,7 +247,7 @@ class Solver(BaseSolver):
                 self.timer.cnt("rd")
                 loss, commit_loss, after_outs, before_outs, ys, olens = self.model(
                     xs=ppgs,
-                    ilens= in_lengths,
+                    ilens=in_lengths,
                     ys=mels,
                     olens=out_lengths,
                     spembs=spk_ids,
