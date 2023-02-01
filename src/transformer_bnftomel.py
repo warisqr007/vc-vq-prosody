@@ -24,6 +24,7 @@ from espnet.nets.pytorch_backend.transformer.decoder import Decoder
 from espnet.nets.pytorch_backend.transformer.embedding import PositionalEncoding
 from espnet.nets.pytorch_backend.transformer.embedding import ScaledPositionalEncoding
 from espnet.nets.pytorch_backend.transformer.encoder import Encoder
+from espnet.nets.pytorch_backend.conformer.encoder import Encoder as ConformerEncoder
 from espnet.nets.pytorch_backend.transformer.initializer import initialize
 from espnet.nets.tts_interface import TTSInterface
 from espnet.utils.cli_utils import strtobool
@@ -142,21 +143,49 @@ class Transformer(TTSInterface, torch.nn.Module):
             )
         else:
             encoder_input_layer = args.transformer_input_layer
-        # self.encoder = Encoder(
-        #     idim=args.idim,
+        self.encoder = Encoder(
+            idim=args.idim,
+            attention_dim=args.adim,
+            attention_heads=args.aheads,
+            linear_units=args.eunits,
+            num_blocks=args.elayers,
+            input_layer=encoder_input_layer,
+            dropout_rate=args.transformer_enc_dropout_rate,
+            positional_dropout_rate=args.transformer_enc_positional_dropout_rate,
+            attention_dropout_rate=args.transformer_enc_attn_dropout_rate,
+            pos_enc_class=pos_enc_class,
+            normalize_before=args.encoder_normalize_before,
+            concat_after=args.encoder_concat_after,
+            positionwise_layer_type=args.positionwise_layer_type,
+            positionwise_conv_kernel_size=args.positionwise_conv_kernel_size,
+        )
+
+        # self.encoder = ConformerEncoder(
+        #     idim = args.idim,
         #     attention_dim=args.adim,
         #     attention_heads=args.aheads,
-        #     linear_units=args.eunits,
-        #     num_blocks=args.elayers,
-        #     input_layer=encoder_input_layer,
-        #     dropout_rate=args.transformer_enc_dropout_rate,
-        #     positional_dropout_rate=args.transformer_enc_positional_dropout_rate,
-        #     attention_dropout_rate=args.transformer_enc_attn_dropout_rate,
-        #     pos_enc_class=pos_enc_class,
-        #     normalize_before=args.encoder_normalize_before,
-        #     concat_after=args.encoder_concat_after,
-        #     positionwise_layer_type=args.positionwise_layer_type,
-        #     positionwise_conv_kernel_size=args.positionwise_conv_kernel_size,
+        #     linear_units=2048,
+        #     num_blocks=2,
+        #     dropout_rate=0.1,
+        #     positional_dropout_rate=0.1,
+        #     attention_dropout_rate=0.0,
+        #     input_layer="conv2d",
+        #     normalize_before=True,
+        #     concat_after=False,
+        #     positionwise_layer_type="linear",
+        #     positionwise_conv_kernel_size=1,
+        #     macaron_style=False,
+        #     pos_enc_layer_type="abs_pos",
+        #     selfattention_layer_type="selfattn",
+        #     activation_type="swish",
+        #     use_cnn_module=True,
+        #     zero_triu=False,
+        #     cnn_module_kernel=15,
+        #     padding_idx=-1,
+        #     stochastic_depth_rate=0.0,
+        #     intermediate_layers=None,
+        #     ctc_softmax=None,
+        #     conditioning_layer_dim=None,
         # )
 
         self.vq = VectorQuantize(
@@ -169,7 +198,7 @@ class Transformer(TTSInterface, torch.nn.Module):
         self.prosody_encoder = ECAPA_TDNN()
 
         self.prosody_spk_projection = torch.nn.Linear(
-            args.idim + self.spk_embed_dim + self.prosody_emb_dim, args.adim
+            args.adim + self.spk_embed_dim + self.prosody_emb_dim, args.adim
         )
 
         # define transformer decoder
@@ -356,13 +385,16 @@ class Transformer(TTSInterface, torch.nn.Module):
 
 
         x_masks = self._source_mask(ilens_new)
+        hs, hs_masks = self.encoder(xs_quantized_unique, x_masks)
 
-        spembs = F.normalize(spembs).unsqueeze(1).expand(-1, xs_quantized_unique.size(1), -1)
+        # print(f'xs_quantized_unique: {xs_quantized_unique.shape} \nhs shape: {hs.shape}')
+
+        spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hs.size(1), -1)
         prosody_emb = self.prosody_encoder(prosody_vec.transpose(1,2))
         #print(f'prosody_emb : {prosody_emb.shape}')
-        prosody_emb = F.normalize(prosody_emb).unsqueeze(1).expand(-1, xs_quantized_unique.size(1), -1)
+        prosody_emb = F.normalize(prosody_emb).unsqueeze(1).expand(-1, hs.size(1), -1)
 
-        hs_int = self.prosody_spk_projection(torch.cat([xs_quantized_unique, prosody_emb, spembs], dim=-1))
+        hs_int = self.prosody_spk_projection(torch.cat([hs, prosody_emb, spembs], dim=-1))
 
         # print(f'hs : {hs.shape} \n hs_masks : {hs_masks.shape}')
         # print(hs_masks[0])
@@ -398,7 +430,7 @@ class Transformer(TTSInterface, torch.nn.Module):
 
         # forward decoder
         y_masks = self._target_mask(olens_in)
-        zs, _ = self.decoder(ys_in, y_masks, hs_int, x_masks)
+        zs, _ = self.decoder(ys_in, y_masks, hs_int, hs_masks)
         # (B, Lmax//r, odim * r) -> (B, Lmax//r * r, odim)
         before_outs = self.feat_out(zs).view(zs.size(0), -1, self.odim)
         # (B, Lmax//r, r) -> (B, Lmax//r * r)

@@ -53,10 +53,10 @@ model:
   dprenet_units: 256
   adim: 512
   aheads: 4
-  elayers: 4
+  elayers: 3
   eunits: 2048
   dlayers: 6
-  dunits: 1536
+  dunits: 2048
   postnet_layers: 5
   postnet_filts: 5
   postnet_chans: 256
