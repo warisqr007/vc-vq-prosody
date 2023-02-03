@@ -521,25 +521,17 @@ class Transformer(TTSInterface, torch.nn.Module):
 
         # forward encoder
         x_ds = x_ds.unsqueeze(0)
-        if self.whereusespkd == 'atinput':
-            spembs = spemb.unsqueeze(0)
-            x_ds = self._integrate_with_spk_in_embed(x_ds,spembs)
-        hs, _ = self.encoder(x_ds, None)
 
-        # if self.use_f0:
-        #     logf0_uv = self.pitch_convs(logf0_uv.transpose(1, 2)).transpose(1, 2)
-        #     # print(logf0_uv.shape)
-        #     # print(hs.shape)
-        #     hs = hs + logf0_uv
+        x_quantized, indices, _ = self.vq(x_ds)
 
-        # integrate speaker embedding
-        if self.spk_embed_dim is not None and self.whereusespkd != 'atinput':
-            spembs = spemb.unsqueeze(0)
-            hs = self._integrate_with_spk_embed(hs, spembs)
+        spembs = spemb.unsqueeze(0)
+        spembs = F.normalize(spembs).unsqueeze(1).expand(-1, x_ds.size(1), -1)
 
-        # Add prosody information
         prosody_vec = prosody_vec.unsqueeze(0)
-        hs = self._integrate_with_prosody_embed(hs, None, prosody_vec)
+        prosody_emb = self.prosody_encoder(prosody_vec.transpose(1,2))
+        prosody_emb = F.normalize(prosody_emb).unsqueeze(1).expand(-1, x_ds.size(1), -1)
+        
+        hs = self.prosody_spk_projection(torch.cat([x_quantized, prosody_emb, spembs], dim=-1))
 
         # set limits of length
         # maxlen = int(hs.size(1) * maxlenratio / self.reduction_factor)
