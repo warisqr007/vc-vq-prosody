@@ -189,8 +189,8 @@ class Transformer(TTSInterface, torch.nn.Module):
         # )
 
         self.vq = VectorQuantize(
-                    dim = 256,
-                    codebook_size =  50,
+                    dim = args.codebook_embed_size,
+                    codebook_size =  args.codebook_size,
                     use_cosine_sim = True   # set this to True
                 )
         self.commitment_cost = args.commitment_cost
@@ -349,7 +349,7 @@ class Transformer(TTSInterface, torch.nn.Module):
         # Now pad the bnf sequence batch and create length vectors
         # Add one block of (self attention layer + conv layer)
         ###################
-
+        
         xs_quantized, indices, commit_loss = self.vq(xs_ds)
         #print(f'xs : {xs_quantized.shape} \n prosody_vec : {prosody_vec.shape} \nIndices: {indices.shape}')
 
@@ -578,7 +578,7 @@ class Transformer(TTSInterface, torch.nn.Module):
 
         # thin out input frames for reduction factor
         # (B, Lmax, idim) ->  (B, Lmax // r, idim * r)
-        olens = x.shape[0]
+        olens = prosody_vec.shape[0]
         if self.encoder_reduction_factor > 1:
             Lmax, idim = x.shape
             if Lmax % self.encoder_reduction_factor != 0:
@@ -592,25 +592,35 @@ class Transformer(TTSInterface, torch.nn.Module):
 
         # forward encoder
         x_ds = x_ds.unsqueeze(0)
-        if self.whereusespkd == 'atinput':
-            spembs = spemb.unsqueeze(0)
-            x_ds = self._integrate_with_spk_in_embed(x_ds,spembs)
-        hs, _ = self.encoder(x_ds, None)
 
-        # if self.use_f0:
-        #     logf0_uv = self.pitch_convs(logf0_uv.transpose(1, 2)).transpose(1, 2)
-        #     # print(logf0_uv.shape)
-        #     # print(hs.shape)
-        #     hs = hs + logf0_uv
+        xs_quantized, indices, _ = self.vq(x_ds)
 
-        # integrate speaker embedding
-        if self.spk_embed_dim is not None and self.whereusespkd != 'atinput':
-            spembs = spemb.unsqueeze(0)
-            hs = self._integrate_with_spk_embed(hs, spembs)
+        ilens_new = indices.data.new(*(indices.shape[0],)).fill_(0)
+        for i, x_idx in enumerate(indices):
+            x_unique, x_counts_idx = torch.unique_consecutive(x_idx, return_counts=True)
+            ilens_new[i] = x_unique.size(0)
 
-        # Add prosody information
+        # print(f'ilens : {ilens_new}')
+        ilen_max = max(ilens_new)
+        xs_quantized_unique = xs_quantized.data.new(*(xs_quantized.shape[0], ilen_max, xs_quantized.shape[2])).fill_(0)
+        for i, (x_quantized, x_idx) in enumerate(zip(xs_quantized, indices)):
+            x_idx_unique, x_idx_counts = torch.unique_consecutive(x_idx, return_counts=True)
+            x_idx_counts = torch.cat([torch.tensor([0]).cuda(), x_idx_counts[:-1]])
+            x_quant_idx = x_idx_counts.cumsum(dim=0)
+            length = x_idx_unique.size(0)
+            xs_quantized_unique[i, :length, :] = x_quantized[x_quant_idx]
+
+
+        hs, _ = self.encoder(xs_quantized_unique, None)
+
+        spembs = spemb.unsqueeze(0)
+        spembs = F.normalize(spembs).unsqueeze(1).expand(-1, hs.size(1), -1)
+
         prosody_vec = prosody_vec.unsqueeze(0)
-        hs = self._integrate_with_prosody_embed(hs, None, prosody_vec)
+        prosody_emb = self.prosody_encoder(prosody_vec.transpose(1,2))
+        prosody_emb = F.normalize(prosody_emb).unsqueeze(1).expand(-1, hs.size(1), -1)
+
+        hs = self.prosody_spk_projection(torch.cat([hs, prosody_emb, spembs], dim=-1))
 
         # set limits of length
         # maxlen = int(hs.size(1) * maxlenratio / self.reduction_factor)

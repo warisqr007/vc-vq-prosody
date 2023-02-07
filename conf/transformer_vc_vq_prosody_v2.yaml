@@ -16,7 +16,7 @@ data:
   min_max_norm_mel: true
   mel_min: -12.0
   mel_max: 2.5
-  pretrain_model_file: /mnt/data1/waris/repo/vc-vq-prosody/ckpt/transformer-vc-vq-dr/best_loss_step_430000.pth
+  pretrain_model_file: /mnt/data1/waris/repo/vc-vq-prosody/ckpt/transformer-vc-vq-dr-v2/best_loss_step_80000.pth
   
 # hparas:
 #   batch_size: 24
@@ -53,9 +53,9 @@ model:
   dprenet_units: 256
   adim: 512
   aheads: 4
-  elayers: 3
+  elayers: 4
   eunits: 2048
-  dlayers: 6
+  dlayers: 4
   dunits: 2048
   postnet_layers: 5
   postnet_filts: 5
@@ -94,7 +94,7 @@ model:
   # commitment cost
   commitment_cost: 0.25 #VQVAE paper -> 0.1 to 2 (0.25 in general)
   prosody_emb_dim: 192
-  codebook_size: 50
+  codebook_size: 80 #50
   codebook_embed_size: 256
 
   # training related
